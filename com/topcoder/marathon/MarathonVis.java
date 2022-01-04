@@ -1,21 +1,6 @@
 package com.topcoder.marathon;
 
-import java.awt.BasicStroke;
-import java.awt.Color;
-import java.awt.Dimension;
-import java.awt.Font;
-import java.awt.FontMetrics;
-import java.awt.GradientPaint;
-import java.awt.Graphics;
-import java.awt.Graphics2D;
-import java.awt.GraphicsConfiguration;
-import java.awt.GraphicsDevice;
-import java.awt.GraphicsEnvironment;
-import java.awt.Insets;
-import java.awt.Rectangle;
-import java.awt.RenderingHints;
-import java.awt.Shape;
-import java.awt.Toolkit;
+import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
@@ -38,9 +23,7 @@ import java.util.List;
 import java.util.Map;
 
 import javax.imageio.ImageIO;
-import javax.swing.JFrame;
-import javax.swing.JPanel;
-import javax.swing.SwingUtilities;
+import javax.swing.*;
 
 /**
  * Base class for Topcoder Marathon testers with visualization. 
@@ -67,21 +50,19 @@ public abstract class MarathonVis extends MarathonTester {
     protected JFrame frame;
     private boolean vis = true;
     private JPanel panel;
-    private Font infoFontPlain, infoFontBold;
-    private final Map<Object, Object> infoMap = new HashMap<Object, Object>();
-    private final Map<Object, Boolean> infoChecked = new HashMap<Object, Boolean>();
-    private final Map<Object, Rectangle2D> infoRects = new HashMap<Object, Rectangle2D>();
-    private final List<Object> infoSequence = new ArrayList<Object>();
-    private int border, infoFontWidth, infoFontHeight, infoColumns, infoLines;
+    private Map<Object, Object> infoMap = new HashMap<Object, Object>();
+    private Map<Object, Boolean> infoChecked = new HashMap<Object, Boolean>();
+    private Map<Object, Rectangle2D> infoRects = new HashMap<Object, Rectangle2D>();
+    private List<Object> infoSequence = new ArrayList<Object>();
     private double size = -1;
-    private Rectangle2D contentRect = new Rectangle2D.Double(0, 0, 100, 100);
     private Rectangle2D contentScreen = new Rectangle2D.Double();
-    private static final double lineSpacing = 1.25;
-    private RenderingHints hints;
     private long paintTime;
     private int paintCnt;
     private int saveVisSeq;
     private BufferedImage lastSavedImage;
+
+    private ArrayList<Frame> frames = new ArrayList<>();
+    private int currentFrame = -1;
 
     protected abstract void paintContent(Graphics2D g);
 
@@ -101,13 +82,13 @@ public abstract class MarathonVis extends MarathonTester {
 
     protected final void setInfoMaxDimension(int infoColumns, int infoLines) {
         if (!vis) return;
-        this.infoColumns = infoColumns;
-        this.infoLines = infoLines;
+        Frame.infoColumns = infoColumns;
+        Frame.infoLines = infoLines;
     }
 
     protected final void setContentRect(double xLeft, double yTop, double xRight, double yBottom) {
         if (!vis) return;
-        contentRect.setRect(xLeft, yTop, xRight - xLeft, yBottom - yTop);
+        Frame.contentRect.setRect(xLeft, yTop, xRight - xLeft, yBottom - yTop);
     }
 
     protected final void setDefaultSize(int size) {
@@ -135,7 +116,7 @@ public abstract class MarathonVis extends MarathonTester {
                     hintsMap.put(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
                     hintsMap.put(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
                 }
-                hints = new RenderingHints(hintsMap);
+                Frame.hints = new RenderingHints(hintsMap);
 
                 frame = new JFrame();
                 frame.addWindowListener(new WindowAdapter() {
@@ -144,20 +125,45 @@ public abstract class MarathonVis extends MarathonTester {
                     }
                 });
 
+                JPanel mainPanel = new JPanel(new BorderLayout());
+                JSlider slider = new JSlider(JSlider.HORIZONTAL, 0, 0, 0);
+                slider.setMajorTickSpacing(10);
+                slider.setMinorTickSpacing(1);
+                slider.addChangeListener(changeEvent -> { currentFrame = slider.getValue(); panel.repaint(); });
                 panel = new JPanel() {
                     private static final long serialVersionUID = -1008231133177413855L;
 
                     public void paint(Graphics g) {
-                        paintVis(g, getWidth(), getHeight());
+                        long t = System.currentTimeMillis();
+                        synchronized (updateLock) {
+                            if (currentFrame >= frames.size()) {
+                                currentFrame = frames.size();
+                                CachedGraphics2D cached = new CachedGraphics2D((Graphics2D) g);
+                                paintContent(cached);
+                                Frame frame = new Frame(cached, infoMap, infoChecked, infoRects, infoSequence);
+                                infoMap = new HashMap<>();
+                                infoChecked = new HashMap<>();
+                                infoRects = new HashMap<>();
+                                infoSequence = new ArrayList<>();
+                                frames.add(frame);
+                                slider.setMaximum(frames.size() - 1);
+                                slider.setValue(frames.size() - 1);
+                            }
+                            frames.get(Math.min(currentFrame, frames.size() - 1)).render((Graphics2D) g, getWidth(), getHeight());
+                        }
+                        paintTime += System.currentTimeMillis() - t;
+                        paintCnt++;
                     }
                 };
+                mainPanel.add(panel, BorderLayout.CENTER);
+                mainPanel.add(slider, BorderLayout.NORTH);
 
                 panel.addMouseListener(new MouseAdapter() {
                     public void mousePressed(MouseEvent e) {
                         if (contentScreen != null && contentScreen.contains(e.getPoint())) {
                             if (contentScreen.getWidth() > 0 && contentScreen.getHeight() > 0) {
-                                double x = (e.getX() - contentScreen.getX()) / contentScreen.getWidth() * contentRect.getWidth() + contentRect.getX();
-                                double y = (e.getY() - contentScreen.getY()) / contentScreen.getHeight() * contentRect.getHeight() + contentRect.getY();
+                                double x = (e.getX() - contentScreen.getX()) / contentScreen.getWidth() * Frame.contentRect.getWidth() + Frame.contentRect.getX();
+                                double y = (e.getY() - contentScreen.getY()) / contentScreen.getHeight() * Frame.contentRect.getHeight() + Frame.contentRect.getY();
                                 new Thread() {
                                     public void run() {
                                         contentClicked(x, y, e.getButton(), e.getClickCount());
@@ -190,8 +196,8 @@ public abstract class MarathonVis extends MarathonTester {
                 if (infoScale < 0) infoScale = 0;
                 else if (infoScale > 400) infoScale = 400;
                 if (infoScale != 0) {
-                    infoFontPlain = new Font(Font.SANS_SERIF, Font.PLAIN, resolution * infoScale / 800);
-                    infoFontBold = new Font(Font.SANS_SERIF, Font.BOLD, infoFontPlain.getSize());
+                    Frame.infoFontPlain = new Font(Font.SANS_SERIF, Font.PLAIN, resolution * infoScale / 800);
+                    Frame.infoFontBold = new Font(Font.SANS_SERIF, Font.BOLD, Frame.infoFontPlain.getSize());
                 }
 
                 try {
@@ -202,16 +208,16 @@ public abstract class MarathonVis extends MarathonTester {
                             frame.setIconImage(getIcon());
                             frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 
-                            frame.setContentPane(panel);
+                            frame.setContentPane(mainPanel);
 
-                            if (infoFontPlain != null) {
+                            if (Frame.infoFontPlain != null) {
                                 FontRenderContext frc = new FontRenderContext(null, true, true);
-                                Rectangle2D rc = infoFontBold.getStringBounds("0", frc);
-                                infoFontWidth = (int) Math.ceil(rc.getWidth());
-                                infoFontHeight = (int) Math.ceil(rc.getHeight());
+                                Rectangle2D rc = Frame.infoFontBold.getStringBounds("0", frc);
+                                Frame.infoFontWidth = (int) Math.ceil(rc.getWidth());
+                                Frame.infoFontHeight = (int) Math.ceil(rc.getHeight());
                             }
 
-                            border = resolution / 7;
+                            Frame.border = resolution / 7;
                             showAndAdjustWindowBounds();
                         }
                     });
@@ -220,6 +226,7 @@ public abstract class MarathonVis extends MarathonTester {
             }
         }
         if (parameters.isDefined(Parameters.saveVis)) saveVis();
+        currentFrame++;
         panel.repaint();
     }
 
@@ -232,7 +239,7 @@ public abstract class MarathonVis extends MarathonTester {
             if (!folder.exists()) folder.mkdirs();
             BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_BGR);
             Graphics2D g = img.createGraphics();
-            paintVis(g, w, h);
+            frames.get(currentFrame).render(g, w, h);
             g.dispose();
             try {
                 synchronized (updateLock) {
@@ -362,13 +369,13 @@ public abstract class MarathonVis extends MarathonTester {
                 Insets fi = frame.getInsets();
                 int fw = bounds.width - fi.left - fi.right;
                 int fh = bounds.height - fi.top - fi.bottom;
-                double sw = (fw - 3 * border - infoColumns * infoFontWidth) / contentRect.getWidth();
-                double sh = (fh - 2 * border) / contentRect.getHeight();
+                double sw = (fw - 3 * Frame.border - Frame.infoColumns * Frame.infoFontWidth) / Frame.contentRect.getWidth();
+                double sh = (fh - 2 * Frame.border) / Frame.contentRect.getHeight();
                 size = Math.min(sw, sh);
             }
-            int width = 2 * border + (int) (contentRect.getWidth() * size);
-            if (infoFontWidth > 0) width += border + infoColumns * infoFontWidth;
-            int height = 2 * border + (int) Math.max(infoLines * infoFontHeight * lineSpacing, contentRect.getHeight() * size);
+            int width = 2 * Frame.border + (int) (Frame.contentRect.getWidth() * size);
+            if (Frame.infoFontWidth > 0) width += Frame.border + Frame.infoColumns * Frame.infoFontWidth;
+            int height = 2 * Frame.border + (int) Math.max(Frame.infoLines * Frame.infoFontHeight * Frame.lineSpacing, Frame.contentRect.getHeight() * size);
             panel.setPreferredSize(new Dimension(width, height));
             frame.pack();
         }
@@ -430,156 +437,14 @@ public abstract class MarathonVis extends MarathonTester {
     }
 
     protected final Rectangle2D getPaintRect() {
-        return contentRect;
-    }
-
-    private void paintVis(Graphics g, int w, int h) {
-        long t = System.currentTimeMillis();
-        Graphics2D g2 = (Graphics2D) g;
-        g2.setColor(new Color(230, 230, 232));
-        g2.fillRect(0, 0, w, h);
-        g2.setRenderingHints(hints);
-
-        synchronized (updateLock) {
-            if (infoColumns > 0 && infoFontWidth > 0) paintInfo(g2, w);
-            paintCenter(g2, infoFontWidth == 0 ? w : w - infoFontWidth * infoColumns - border, h);
-            paintTime += System.currentTimeMillis() - t;
-            paintCnt++;
-        }
-    }
-
-    private void paintCenter(Graphics2D g, int w, int h) {
-        int pw = w - 2 * border;
-        int ph = h - 2 * border;
-        if (pw <= 0 || ph <= 0) return;
-        int px = border;
-        int py = border;
-        if (contentRect.getWidth() * ph > contentRect.getHeight() * pw) {
-            ph = (int) (contentRect.getHeight() * pw / contentRect.getWidth());
-        } else {
-            int nw = (int) (contentRect.getWidth() * ph / contentRect.getHeight());
-            px += (pw - nw) / 2;
-            pw = nw;
-        }
-        AffineTransform nt = new AffineTransform();
-        nt.translate(px, py);
-        nt.scale(pw / contentRect.getWidth(), ph / contentRect.getHeight());
-        nt.translate(-contentRect.getX(), -contentRect.getY());
-        AffineTransform ct = g.getTransform();
-        contentScreen.setRect(px, py, pw, ph);
-        g.setTransform(nt);
-        paintContent(g);
-        g.setTransform(ct);
-    }
-
-    private void paintInfo(Graphics2D g, int w) {
-        int x = w - infoFontWidth * infoColumns - border;
-        int y = border;
-        int maxKey = 0;
-        g.setFont(infoFontBold);
-        FontMetrics metrics = g.getFontMetrics();
-        for (Object key : infoSequence) {
-            if (key != null) {
-                String s = "";
-                if (key instanceof Color) {
-                    s = "##";
-                } else {
-                    s = key.toString();
-                }
-                boolean hasValue = infoMap.get(key) != null;
-                if (hasValue) s += ": ";
-                if (infoChecked.get(key) != null) s += "##";
-                Rectangle2D rect = metrics.getStringBounds(s, g);
-                int width = (int) rect.getWidth();
-                if (!hasValue) width /= 2;
-                maxKey = Math.max(maxKey, width);
-            }
-        }
-
-        int lineHeight = (int) (lineSpacing * infoFontHeight);
-        g.setStroke(new BasicStroke(1f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        g.setColor(Color.black);
-        for (Object key : infoSequence) {
-            if (key != null) {
-                Object value = infoMap.get(key);
-                g.setFont(infoFontBold);
-                int xc = 0;
-                if (value == null) {
-                    xc = drawString(g, key.toString(), x + maxKey, y, 0);
-                } else {
-                    if (key instanceof Color) {
-                        xc = drawColor(g, (Color) key, x + maxKey, y);
-                    } else {
-                        xc = drawString(g, key + ": ", x + maxKey, y, -1);
-                    }
-                    g.setFont(infoFontPlain);
-                    drawString(g, value.toString(), x + maxKey, y, 1);
-                }
-                Boolean checked = infoChecked.get(key);
-                if (checked != null) drawChecked(g, key, checked, xc, y);
-            }
-            y += lineHeight;
-        }
-    }
-
-    private int drawColor(Graphics2D g, Color color, int x, int y) {
-        FontMetrics metrics = g.getFontMetrics();
-        int size = metrics.getHeight() - metrics.getDescent();
-        g.setColor(color);
-        Rectangle2D rc = new Rectangle2D.Double(x - size - infoFontWidth, y + metrics.getDescent() / 2, size, size);
-        g.fill(rc);
-        g.setColor(Color.black);
-        g.draw(rc);
-        return (int) rc.getMinX();
-    }
-
-    private void drawChecked(Graphics2D g, Object key, boolean checked, int x, int y) {
-        FontMetrics metrics = g.getFontMetrics();
-        int size = metrics.getHeight() - metrics.getDescent();
-        Rectangle2D rc = new Rectangle2D.Double(x - size - infoFontWidth, y + metrics.getDescent() / 2, size, size);
-        g.setColor(Color.black);
-        g.draw(rc);
-        synchronized (infoRects) {
-            infoRects.put(key, rc);
-        }
-        if (checked) {
-            g.draw(new Line2D.Double(rc.getMinX(), rc.getMinY(), rc.getMaxX(), rc.getMaxY()));
-            g.draw(new Line2D.Double(rc.getMinX(), rc.getMaxY(), rc.getMaxX(), rc.getMinY()));
-        }
-    }
-
-    private int drawString(Graphics2D g, String s, int x, int y, int align) {
-        FontMetrics metrics = g.getFontMetrics();
-        Rectangle2D rect = metrics.getStringBounds(s, g);
-        if (align < 0) x -= (int) rect.getWidth();
-        else if (align == 0) x -= (int) rect.getWidth() / 2;
-        g.drawString(s, x, y + metrics.getAscent());
-        return x;
-    }
-
-    protected void adjustFont(Graphics2D g, String fontName, int fontStyle, String largestStr, Rectangle2D rcToFit) {
-        g.setFont(new Font(fontName, fontStyle, 32));
-        Rectangle2D bounds = g.getFontMetrics().getStringBounds(largestStr, g);
-        double f = Math.min(rcToFit.getWidth() / bounds.getWidth(), rcToFit.getHeight() / bounds.getHeight());
-        AffineTransform transformation = AffineTransform.getScaleInstance(f, f);
-        g.setFont(g.getFont().deriveFont(transformation));
-    }
-
-    protected void drawString(Graphics2D g, String str, Rectangle2D rc) {
-        GlyphVector v = g.getFont().createGlyphVector(g.getFontRenderContext(), str);
-        Shape s = v.getOutline();
-        Rectangle2D rs = s.getBounds2D();
-        double x = rc.getX() - rs.getX() + (rc.getWidth() - rs.getWidth()) / 2.0;
-        double y = rc.getY() - rs.getY() + (rc.getHeight() - rs.getHeight()) / 2.0;
-        s = AffineTransform.getTranslateInstance(x, y).createTransformedShape(s);
-        g.fill(s);
+        return Frame.contentRect;
     }
 
     private BufferedImage getIcon() {
         int size = 256;
         BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
-        g.setRenderingHints(hints);
+        g.setRenderingHints(Frame.hints);
         AffineTransform nt = new AffineTransform();
         nt.scale(size, size);
         g.setTransform(nt);
@@ -615,7 +480,7 @@ public abstract class MarathonVis extends MarathonTester {
         g.draw(e5);
         g.dispose();
         float[] blurKernel = {0.1f,0.1f,0.1f,0.1f,0.2f,0.1f,0.1f,0.1f,0.1f};
-        BufferedImageOp blurFilter = new ConvolveOp(new Kernel(3, 3, blurKernel), ConvolveOp.EDGE_NO_OP, hints);
+        BufferedImageOp blurFilter = new ConvolveOp(new Kernel(3, 3, blurKernel), ConvolveOp.EDGE_NO_OP, Frame.hints);
         blurFilter.filter(img, null);
         return img;
     }
